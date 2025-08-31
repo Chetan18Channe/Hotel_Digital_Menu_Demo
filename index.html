@@ -28,8 +28,8 @@
     <div class="flex-1 p-4 md:p-8 overflow-y-auto">
         <div class="flex justify-between items-center mb-6">
             <h1 class="text-4xl font-bold text-gray-900">Digital Menu</h1>
-            <div id="user-id" class="bg-white rounded-full px-4 py-2 text-sm font-semibold text-gray-700 shadow-md">
-                Loading...
+            <div id="table-id" class="bg-white rounded-full px-4 py-2 text-sm font-semibold text-gray-700 shadow-md">
+                Table 1234
             </div>
         </div>
         <div id="menu-items-container" class="grid gap-6 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
@@ -60,12 +60,7 @@
         </div>
     </div>
 
-    <!-- Firebase SDK Scripts -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
+    <script type="text/javascript">
         // --- Core Application Logic ---
 
         const menuItems = [
@@ -78,13 +73,8 @@
 
         const menuMap = new Map(menuItems.map(item => [item.id, item]));
 
-        let db;
-        let auth;
-        let userId;
         let order = {};
         let isBilling = false;
-        let appId;
-        let unsubscribeFromFirestore;
 
         // UI Elements
         const menuContainer = document.getElementById('menu-items-container');
@@ -93,69 +83,12 @@
         const orderTotalDisplay = document.getElementById('order-total');
         const billingButton = document.getElementById('billing-button');
         const newOrderButton = document.getElementById('new-order-button');
-        const userIdDisplay = document.getElementById('user-id');
         const notificationToast = document.getElementById('notification-toast');
 
-        // --- Firebase Initialization and Auth ---
-        window.onload = async () => {
-            try {
-                const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-                if (!firebaseConfig) {
-                    console.error("Firebase config is not available.");
-                    return;
-                }
-                const app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-
-                appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
-                }
-
-                onAuthStateChanged(auth, (user) => {
-                    if (user) {
-                        userId = user.uid;
-                        userIdDisplay.textContent = `Table ID: ${userId.substring(0, 8)}...`;
-                        startRealtimeListener();
-                    } else {
-                        userId = null;
-                        userIdDisplay.textContent = 'Auth Failed';
-                    }
-                });
-
-                renderMenuItems();
-            } catch (error) {
-                console.error("Error initializing Firebase:", error);
-            }
-        };
-
-        // --- Firestore Real-time Listener ---
-        const startRealtimeListener = () => {
-            if (unsubscribeFromFirestore) {
-                unsubscribeFromFirestore();
-            }
-            if (!db || !userId) return;
-
-            const userDocRef = doc(db, `artifacts/${appId}/public/data/orders`, userId);
-
-            unsubscribeFromFirestore = onSnapshot(userDocRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    const orderData = docSnap.data();
-                    order = orderData.items || {};
-                    isBilling = orderData.isBilling || false;
-                } else {
-                    order = {};
-                    isBilling = false;
-                }
-                updateUI();
-            }, (error) => {
-                console.error("Failed to listen for order updates:", error);
-            });
+        // Initial rendering of menu items
+        window.onload = () => {
+            renderMenuItems();
+            updateUI();
         };
 
         // --- UI Update & Rendering ---
@@ -169,7 +102,7 @@
             menuItems.forEach(item => {
                 const itemHtml = `
                     <div class="bg-white rounded-xl shadow-lg overflow-hidden transition-transform transform hover:scale-105">
-                        <img src="${item.image}" alt="${item.name}" class="w-full h-48 object-cover" onerror="this.onerror=null; this.src='https://placehold.co/400x300/CCCCCC/666666?text=Image+Unavailable';">
+                        <img src="${item.image}" alt="${item.name}" class="w-full h-48 object-cover rounded-t-xl" onerror="this.onerror=null; this.src='https://placehold.co/400x300/CCCCCC/666666?text=Image+Unavailable';">
                         <div class="p-6">
                             <h2 class="text-xl font-bold text-gray-800">${item.name}</h2>
                             <p class="text-gray-600 mt-2">${item.description}</p>
@@ -270,59 +203,34 @@
             }, 3000);
         };
 
-        // --- Firestore Interaction Functions ---
-
-        const updateOrderInFirestore = async (newOrder) => {
-            if (!db || !userId) return;
-            try {
-                const userDocRef = doc(db, `artifacts/${appId}/public/data/orders`, userId);
-                await setDoc(userDocRef, { items: newOrder, isBilling }, { merge: true });
-            } catch (error) {
-                console.error("Error updating order:", error);
-                showTemporaryNotification('Error updating order. Please try again.');
-            }
+        const handleAddItem = (item) => {
+            if (isBilling) return;
+            order[item.id] = (order[item.id] || 0) + 1;
+            updateUI();
+            showTemporaryNotification(`Added ${item.name} to order!`);
         };
 
-        const handleAddItem = async (item) => {
+        const handleRemoveItem = (itemId) => {
             if (isBilling) return;
-            const newOrder = { ...order };
-            newOrder[item.id] = (newOrder[item.id] || 0) + 1;
-            await updateOrderInFirestore(newOrder);
-        };
-
-        const handleRemoveItem = async (itemId) => {
-            if (isBilling) return;
-            const newOrder = { ...order };
-            if (newOrder[itemId] > 1) {
-                newOrder[itemId]--;
+            if (order[itemId] > 1) {
+                order[itemId]--;
             } else {
-                delete newOrder[itemId];
+                delete order[itemId];
             }
-            await updateOrderInFirestore(newOrder);
+            updateUI();
         };
 
-        const handleBilling = async () => {
-            if (!db || !userId) return;
-            try {
-                const userDocRef = doc(db, `artifacts/${appId}/public/data/orders`, userId);
-                await setDoc(userDocRef, { isBilling: true }, { merge: true });
-                showTemporaryNotification('Order placed successfully! A waiter will attend to you shortly.');
-            } catch (error) {
-                console.error("Error placing order:", error);
-                showTemporaryNotification('Error placing order. Please try again.');
-            }
+        const handleBilling = () => {
+            isBilling = true;
+            updateUI();
+            showTemporaryNotification('Order placed successfully! A waiter will attend to you shortly.');
         };
 
-        const handleNewOrder = async () => {
-            if (!db || !userId) return;
-            try {
-                const userDocRef = doc(db, `artifacts/${appId}/public/data/orders`, userId);
-                await deleteDoc(userDocRef);
-                showTemporaryNotification('Starting a new order. Welcome!');
-            } catch (error) {
-                console.error("Error starting new order:", error);
-                showTemporaryNotification('Error starting new order. Please try again.');
-            }
+        const handleNewOrder = () => {
+            order = {};
+            isBilling = false;
+            updateUI();
+            showTemporaryNotification('Starting a new order. Welcome!');
         };
 
         // Event Listeners
