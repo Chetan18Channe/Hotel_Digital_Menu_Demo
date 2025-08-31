@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Restaurant Staff Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .animate-pulse-slow {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: .5;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+
+    <div class="container mx-auto p-4 md:p-8">
+        <div class="flex flex-col md:flex-row justify-between items-center mb-8">
+            <h1 class="text-4xl md:text-5xl font-bold text-teal-400 mb-4 md:mb-0">Staff Dashboard</h1>
+            <div id="user-id" class="text-gray-400">Loading auth...</div>
+        </div>
+
+        <div id="loading-spinner" class="text-center py-10 hidden">
+            <div class="w-16 h-16 border-4 border-dashed rounded-full animate-spin border-teal-400 mx-auto"></div>
+            <p class="mt-4 text-gray-400">Fetching orders...</p>
+        </div>
+
+        <div id="orders-container" class="grid gap-6 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <!-- Order cards will be rendered here by JavaScript -->
+        </div>
+
+        <div id="no-orders-message" class="hidden text-center py-20">
+            <h2 class="text-3xl font-semibold text-gray-500">No active orders at the moment.</h2>
+            <p class="mt-2 text-gray-600">Please wait for customers to place an order.</p>
+        </div>
+    </div>
+
+    <!-- Firebase SDK Scripts -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, doc, deleteDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Core Application Logic ---
+
+        let db;
+        let auth;
+        let appId;
+        const menuMap = new Map(); // Store menu items if needed, though they are not used in this view
+        const ordersContainer = document.getElementById('orders-container');
+        const noOrdersMessage = document.getElementById('no-orders-message');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const userIdDisplay = document.getElementById('user-id');
+
+        // --- Firebase Initialization and Auth ---
+        window.onload = async () => {
+            loadingSpinner.classList.remove('hidden');
+            try {
+                const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+                if (!firebaseConfig) {
+                    console.error("Firebase config is not available.");
+                    loadingSpinner.classList.add('hidden');
+                    return;
+                }
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userIdDisplay.textContent = `Staff ID: ${user.uid.substring(0, 8)}...`;
+                        startRealtimeListener();
+                    } else {
+                        userIdDisplay.textContent = 'Auth Failed';
+                        loadingSpinner.classList.add('hidden');
+                    }
+                });
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+                loadingSpinner.classList.add('hidden');
+            }
+        };
+
+        // --- Firestore Real-time Listener for all Orders ---
+        const startRealtimeListener = () => {
+            if (!db) return;
+
+            const ordersCollectionRef = collection(db, `artifacts/${appId}/public/data/orders`);
+            
+            onSnapshot(ordersCollectionRef, (querySnapshot) => {
+                loadingSpinner.classList.add('hidden');
+                const orders = [];
+                querySnapshot.forEach((doc) => {
+                    const orderData = doc.data();
+                    orders.push({ id: doc.id, ...orderData });
+                });
+                renderOrders(orders);
+            }, (error) => {
+                console.error("Failed to listen for orders:", error);
+                loadingSpinner.classList.add('hidden');
+            });
+        };
+
+        const renderOrders = async (orders) => {
+            ordersContainer.innerHTML = '';
+            if (orders.length === 0) {
+                noOrdersMessage.classList.remove('hidden');
+            } else {
+                noOrdersMessage.classList.add('hidden');
+                for (const order of orders) {
+                    const orderHtml = `
+                        <div class="bg-gray-800 rounded-xl shadow-lg p-6 border-2 ${order.isBilling ? 'border-yellow-400 animate-pulse-slow' : 'border-gray-700'}">
+                            <h2 class="text-2xl font-bold mb-4 flex justify-between items-center">
+                                Order from Table <span class="text-xl text-teal-400">${order.id.substring(0, 8)}...</span>
+                            </h2>
+                            <ul class="space-y-3">
+                                ${await renderOrderItems(order.items)}
+                            </ul>
+                            <div class="mt-6 pt-4 border-t border-gray-700 flex justify-between items-center">
+                                <span class="text-lg font-semibold text-gray-400">Status: </span>
+                                <span class="text-lg font-bold ${order.isBilling ? 'text-yellow-400' : 'text-green-400'}">
+                                    ${order.isBilling ? 'Ready for Billing' : 'Order Placed'}
+                                </span>
+                            </div>
+                            <button data-order-id="${order.id}" class="complete-order-btn mt-6 w-full bg-red-600 text-white py-3 rounded-full font-bold transition-colors hover:bg-red-700">
+                                Mark as Completed
+                            </button>
+                        </div>
+                    `;
+                    ordersContainer.insertAdjacentHTML('beforeend', orderHtml);
+                }
+
+                // Add event listeners to the new buttons
+                document.querySelectorAll('.complete-order-btn').forEach(button => {
+                    button.addEventListener('click', (e) => {
+                        const orderId = e.target.dataset.orderId;
+                        handleCompleteOrder(orderId);
+                    });
+                });
+            }
+        };
+
+        const renderOrderItems = async (items) => {
+            const menuDocRef = doc(db, `artifacts/${appId}/public/data/menu`, 'main-menu');
+            const menuDocSnap = await getDoc(menuDocRef);
+            let itemDataMap = {};
+            if (menuDocSnap.exists()) {
+                itemDataMap = menuDocSnap.data().items || {};
+            }
+
+            let html = '';
+            for (const itemId in items) {
+                const item = itemDataMap[itemId] || { name: 'Unknown Item' };
+                html += `
+                    <li class="flex justify-between items-center">
+                        <span class="text-gray-300">${item.name}</span>
+                        <span class="text-xl font-semibold text-gray-100">${items[itemId]}</span>
+                    </li>
+                `;
+            }
+            return html;
+        };
+
+        const handleCompleteOrder = async (orderId) => {
+            if (!db) return;
+            try {
+                const orderDocRef = doc(db, `artifacts/${appId}/public/data/orders`, orderId);
+                await deleteDoc(orderDocRef);
+                // The onSnapshot listener will handle the UI update automatically
+            } catch (error) {
+                console.error("Error completing order:", error);
+            }
+        };
+    </script>
+</body>
+</html>
